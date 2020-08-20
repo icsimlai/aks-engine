@@ -203,6 +203,7 @@
 // ../../parts/k8s/cloud-init/jumpboxcustomdata.yml
 // ../../parts/k8s/cloud-init/masternodecustomdata.yml
 // ../../parts/k8s/cloud-init/nodecustomdata.yml
+// ../../parts/k8s/containerdtemplate.toml
 // ../../parts/k8s/kubeconfig.json
 // ../../parts/k8s/kubernetesparams.t
 // ../../parts/k8s/kuberneteswindowsfunctions.ps1
@@ -40390,6 +40391,90 @@ func k8sCloudInitNodecustomdataYml() (*asset, error) {
 	return a, nil
 }
 
+var _k8sContainerdtemplateToml = []byte(`root = "C:\\ProgramData\\containerd\\root"
+state = "C:\\ProgramData\\containerd\\state"
+
+[grpc]
+  address = "\\\\.\\pipe\\containerd-containerd"
+  max_recv_message_size = 16777216
+  max_send_message_size = 16777216
+
+[ttrpc]
+  address = ""
+
+[debug]
+  address = ""
+  level = "debug"
+
+[metrics]
+  address = ""
+  grpc_histogram = false
+
+[cgroup]
+  path = ""
+
+[plugins]
+  [plugins.cri]
+    stream_server_address = "127.0.0.1"
+    stream_server_port = "0"
+    enable_selinux = false
+    sandbox_image = "{{pauseImage}}-windows-{{currentversion}}-amd64"
+    stats_collect_period = 10
+    systemd_cgroup = false
+    enable_tls_streaming = false
+    max_container_log_line_size = 16384
+    disable_http2_client = false
+    [plugins.cri.containerd]
+      snapshotter = "windows"
+      no_pivot = false
+      [plugins.cri.containerd.default_runtime]
+        runtime_type = "io.containerd.runhcs.v1"
+        [plugins.cri.containerd.default_runtime.options]
+          Debug = true
+          DebugType = 2
+          SandboxImage = "{{pauseImage}}-windows-{{currentversion}}-amd64"
+          SandboxPlatform = "windows/amd64"
+          SandboxIsolation = {{sandboxIsolation}}
+      [plugins.cri.containerd.runtimes]
+        [plugins.cri.containerd.runtimes.runhcs-wcow-process]
+          runtime_type = "io.containerd.runhcs.v1"
+          [plugins.cri.containerd.runtimes.runhcs-wcow-process.options]
+            Debug = true
+            DebugType = 2
+            SandboxImage = "{{pauseImage}}-windows-{{currentversion}}-amd64"
+            SandboxPlatform = "windows/amd64"
+{{hypervisors}}
+    [plugins.cri.cni]
+      bin_dir = "{{cnibin}}"
+      conf_dir = "{{cniconf}}"
+    [plugins.cri.registry]
+      [plugins.cri.registry.mirrors]
+        [plugins.cri.registry.mirrors."docker.io"]
+          endpoint = ["https://registry-1.docker.io"]
+  [plugins.diff-service]
+    default = ["windows"]
+  [plugins.scheduler]
+    pause_threshold = 0.02
+    deletion_threshold = 0
+    mutation_threshold = 100
+    schedule_delay = "0s"
+    startup_delay = "100ms"`)
+
+func k8sContainerdtemplateTomlBytes() ([]byte, error) {
+	return _k8sContainerdtemplateToml, nil
+}
+
+func k8sContainerdtemplateToml() (*asset, error) {
+	bytes, err := k8sContainerdtemplateTomlBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	info := bindataFileInfo{name: "k8s/containerdtemplate.toml", size: 0, mode: os.FileMode(0), modTime: time.Unix(0, 0)}
+	a := &asset{bytes: bytes, info: info}
+	return a, nil
+}
+
 var _k8sKubeconfigJson = []byte(`    {
         "apiVersion": "v1",
         "clusters": [
@@ -40680,6 +40765,7 @@ var _k8sKubernetesparamsT = []byte(`{{if IsHostedMaster}}
          "3.0.7",
          "3.0.8",
          "3.0.10",
+         "19.03.11",
          "19.03.12"
        ],
       "type": "string"
@@ -40692,7 +40778,8 @@ var _k8sKubernetesparamsT = []byte(`{{if IsHostedMaster}}
       "allowedValues": [
          "1.1.5",
          "1.1.6",
-         "1.2.4"
+         "1.2.4",
+	 "1.3.2"
        ],
       "type": "string"
     },
@@ -41366,6 +41453,8 @@ $global:DockerVersion = "{{WrapAsParameter "windowsDockerVersion"}}"
 
 ## ContainerD Usage
 $global:ContainerRuntime = "{{WrapAsParameter "containerRuntime"}}"
+$global:DefaultContainerdRuntimeHandler = "{{WrapAsParameter "defaultContainerdRuntimeHandler"}}"
+$global:HypervRuntimeHandlers = "{{WrapAsParameter "hypervRuntimeHandlers"}}"
 
 ## VM configuration passed by Azure
 $global:WindowsTelemetryGUID = "{{WrapAsParameter "windowsTelemetryGUID"}}"
@@ -41470,7 +41559,7 @@ try
     # to the windows machine, and run the script manually to watch
     # the output.
     if ($true) {
-        Write-Log "Provisioning $global:DockerServiceName... with IP $MasterIP"
+        Write-Log ".\CustomDataSetupScript.ps1 -MasterIP $MasterIP -KubeDnsServiceIp $KubeDnsServiceIp -MasterFQDNPrefix $MasterFQDNPrefix -Location $Location -AgentKey $AgentKey -AADClientId $AADClientId -AADClientSecret $AADClientSecret -NetworkAPIVersion $NetworkAPIVersion -TargetEnvironment $TargetEnvironment"
 
         if ($global:EnableTelemetry) {
             $global:globalTimer = [System.Diagnostics.Stopwatch]::StartNew()
@@ -43166,6 +43255,67 @@ function RegisterContainerDService {
   }
 }
 
+function CreateHypervisorRuntime {
+  Param(
+    [Parameter(Mandatory = $true)][string]
+    $image,
+    [Parameter(Mandatory = $true)][string]
+    $version,
+    [Parameter(Mandatory = $true)][string]
+    $buildNumber
+  )
+
+  return @"
+        [plugins.cri.containerd.runtimes.runhcs-wcow-hypervisor-$buildnumber]
+          runtime_type = "io.containerd.runhcs.v1"
+          [plugins.cri.containerd.runtimes.runhcs-wcow-hypervisor-$buildnumber.options]
+            Debug = true
+            DebugType = 2
+            SandboxImage = "$image-windows-$version-amd64"
+            SandboxPlatform = "windows/amd64"
+            SandboxIsolation = 1
+"@
+}
+
+function CreateHypervisorRuntimes {
+  Param(
+    [Parameter(Mandatory = $true)][string[]]
+    $builds,
+    [Parameter(Mandatory = $true)][string]
+    $image
+  )
+  
+  Write-Host "Adding hyperv runtimes $builds"
+  $hypervRuntimes = ""
+  ForEach ($buildNumber in $builds) {
+    $windowsVersion = Select-Windows-Version -buildNumber $buildNumber
+    $runtime = createHypervisorRuntime -image $pauseImage -version $windowsVersion -buildNumber $buildNumber
+    if ($hypervRuntimes -eq "") {
+      $hypervRuntimes = $runtime
+    }
+    else {
+      $hypervRuntimes = $hypervRuntimes + "` + "`" + `r` + "`" + `n" + $runtime
+    }
+  }
+
+  return $hypervRuntimes
+}
+
+function Select-Windows-Version {
+  param (
+    [Parameter()]
+    [string]
+    $buildNumber
+  )
+
+  switch ($buildNumber) {
+    "17763" { return "1809" }
+    "18362" { return "1903" }
+    "18363" { return "1909" }
+    "19041" { return "2004" }
+    Default { return "" } 
+  }
+}
 
 function Install-Containerd {
   Param(
@@ -43184,133 +43334,64 @@ function Install-Containerd {
   }
 
   # TODO: check if containerd is already installed and is the same version before this.
-  $zipfile = [Io.path]::Combine($ENV:TEMP, "containerd.zip")
-  DownloadFileOverHttp -Url $ContainerdUrl -DestinationPath $zipfile
-  Expand-Archive -path $zipfile -DestinationPath $global:ContainerdInstallLocation -Force
-  del $zipfile
+  
+  # Extract the package
+  if ($ContainerdUrl.endswith(".zip")) {
+    $zipfile = [Io.path]::Combine($ENV:TEMP, "containerd.zip")
+    DownloadFileOverHttp -Url $ContainerdUrl -DestinationPath $zipfile
+    Expand-Archive -path $zipfile -DestinationPath $global:ContainerdInstallLocation -Force
+    del $zipfile
+  }
+  elseif ($ContainerdUrl.endswith(".tar.gz")) {
+    # upstream containerd package is a tar 
+    $tarfile = [Io.path]::Combine($ENV:TEMP, "containerd.tar.gz")
+    DownloadFileOverHttp -Url $ContainerdUrl -DestinationPath $tarfile
+    mkdir -Force "C:\Program Files\containerd"
+    tar -xzf $tarfile -C $global:ContainerdInstallLocation
+    mv $global:ContainerdInstallLocation\bin\* $global:ContainerdInstallLocation\
+    del $tarfile
+    del -Recurse -Force $global:ContainerdInstallLocation\bin
+  }
 
+  # get configuration options
   Add-SystemPathEntry $global:ContainerdInstallLocation
-
-  # TODO: remove if the node comes up without this code
-  # $configDir = [Io.Path]::Combine($ENV:ProgramData, "containerd")
-  # if (-Not (Test-Path $configDir)) {
-  #     mkdir $configDir
-  # }
-
-  # TODO: call containerd.exe dump config, then modify instead of starting with hardcoded
+  $cdbinary = Join-Path $global:ContainerdInstallLocation containerd.exe
   $configFile = [Io.Path]::Combine($global:ContainerdInstallLocation, "config.toml")
-
   $clusterConfig = ConvertFrom-Json ((Get-Content $global:KubeClusterConfigPath -ErrorAction Stop) | Out-String)
   $pauseImage = $clusterConfig.Cri.Images.Pause
+  $formatedbin = $(($CNIBinDir).Replace("\", "/"))
+  $formatedconf = $(($CNIConfDir).Replace("\", "/"))
+  $sandboxIsolation = 0
+  $windowsVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").ReleaseId
+  $hypervRuntimes = ""
+  $hypervHandlers = $global:HypervRuntimeHandlers.split(",", [System.StringSplitOptions]::RemoveEmptyEntries)
 
-  @"
-version = 2
-root = "C:\\ProgramData\\containerd\\root"
-state = "C:\\ProgramData\\containerd\\state"
-plugin_dir = ""
-disabled_plugins = []
-required_plugins = []
-oom_score = 0
+  # configure
+  if ($global:DefaultContainerdRuntimeHandler -eq "hyperv") {
+    Write-Host "default runtime for containerd set to hyperv"
+    $sandboxIsolation = 1
+  }
 
-[grpc]
-  address = "\\\\.\\pipe\\containerd-containerd"
-  tcp_address = ""
-  tcp_tls_cert = ""
-  tcp_tls_key = ""
-  uid = 0
-  gid = 0
-  max_recv_message_size = 16777216
-  max_send_message_size = 16777216
+  $template = Get-Content -Path "c:\AzureData\k8s\containerdtemplate.toml" 
+  if ($sandboxIsolation -eq 0 -And $hypervHandlers.Count -eq 0) {
+    # remove the value hypervisor place holder
+    $template = $template | Select-String -Pattern 'hypervisors' -NotMatch | Out-String
+  }
+  else {
+    $hypervRuntimes = CreateHypervisorRuntimes -builds @($hypervHandlers) -image $pauseImage
+  }
 
-[ttrpc]
-  address = ""
-  uid = 0
-  gid = 0
-
-[debug]
-  address = ""
-  uid = 0
-  gid = 0
-  level = ""
-
-[metrics]
-  address = ""
-  grpc_histogram = false
-
-[cgroup]
-  path = ""
-
-[timeouts]
-  "io.containerd.timeout.shim.cleanup" = "5s"
-  "io.containerd.timeout.shim.load" = "5s"
-  "io.containerd.timeout.shim.shutdown" = "3s"
-  "io.containerd.timeout.task.state" = "2s"
-
-[plugins]
-  [plugins."io.containerd.gc.v1.scheduler"]
-    pause_threshold = 0.02
-    deletion_threshold = 0
-    mutation_threshold = 100
-    schedule_delay = "0s"
-    startup_delay = "100ms"
-  [plugins."io.containerd.grpc.v1.cri"]
-    disable_tcp_service = true
-    stream_server_address = "127.0.0.1"
-    stream_server_port = "0"
-    stream_idle_timeout = "4h0m0s"
-    enable_selinux = false
-    sandbox_image = "$pauseImage"
-    stats_collect_period = 10
-    systemd_cgroup = false
-    enable_tls_streaming = false
-    max_container_log_line_size = 16384
-    disable_cgroup = false
-    disable_apparmor = false
-    restrict_oom_score_adj = false
-    max_concurrent_downloads = 3
-    disable_proc_mount = false
-    [plugins."io.containerd.grpc.v1.cri".containerd]
-      snapshotter = "windows"
-      default_runtime_name = "runhcs-wcow-process"
-      no_pivot = false
-      [plugins."io.containerd.grpc.v1.cri".containerd.default_runtime]
-        runtime_type = ""
-        runtime_engine = ""
-        runtime_root = ""
-        privileged_without_host_devices = false
-      [plugins."io.containerd.grpc.v1.cri".containerd.untrusted_workload_runtime]
-        runtime_type = ""
-        runtime_engine = ""
-        runtime_root = ""
-        privileged_without_host_devices = false
-      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
-        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runhcs-wcow-process]
-          runtime_type = "io.containerd.runhcs.v1"
-          runtime_engine = ""
-          runtime_root = ""
-          privileged_without_host_devices = false
-    [plugins."io.containerd.grpc.v1.cri".cni]
-      bin_dir = "$(($CNIBinDir).Replace("\","//"))"
-      conf_dir = "$(($CNIConfDir).Replace("\","//"))"
-      max_conf_num = 1
-      conf_template = ""
-    [plugins."io.containerd.grpc.v1.cri".registry]
-      [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
-        [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-          endpoint = ["https://registry-1.docker.io"]
-    [plugins."io.containerd.grpc.v1.cri".x509_key_pair_streaming]
-      tls_cert_file = ""
-      tls_key_file = ""
-  [plugins."io.containerd.metadata.v1.bolt"]
-    content_sharing_policy = "shared"
-  [plugins."io.containerd.runtime.v2.task"]
-    platforms = ["windows/amd64", "linux/amd64"]
-  [plugins."io.containerd.service.v1.diff-service"]
-    default = ["windows", "windows-lcow"]
-"@ | Out-File -Encoding ascii $configFile
+  $template.Replace('{{sandboxIsolation}}', $sandboxIsolation).
+  Replace('{{pauseImage}}', $pauseImage).
+  Replace('{{hypervisors}}', $hypervRuntimes).
+  Replace('{{cnibin}}', $formatedbin).
+  Replace('{{cniconf}}', $formatedconf).
+  Replace('{{currentversion}}', $windowsVersion) | ` + "`" + `
+    Out-File -FilePath "$configFile" -Encoding ascii
 
   RegisterContainerDService
-}`)
+}
+`)
 
 func k8sWindowscontainerdfuncPs1Bytes() ([]byte, error) {
 	return _k8sWindowscontainerdfuncPs1, nil
@@ -47198,6 +47279,20 @@ var _windowsparamsT = []byte(` {{if IsKubernetes}}
         "description": "The version of Docker to be installed on Windows Nodes"
       },
       "type": "string"
+    },
+    "defaultContainerdRuntimeHandler": {
+      "defaultValue": "process",
+      "metadata": {
+        "description": "The containerd handler type (process isolated or hyperv)"
+      },
+      "type": "string"
+    },
+    "hypervRuntimeHandlers": {
+      "defaultValue": "",
+      "metadata": {
+        "description": "comma separated list of hyperv values"
+      },
+      "type": "string"
     }
 `)
 
@@ -47395,123 +47490,124 @@ var _bindata = map[string]func() (*asset, error){
 	"k8s/addons/1.7/kubernetesmasteraddons-heapster-deployment.yaml":              k8sAddons17KubernetesmasteraddonsHeapsterDeploymentYaml,
 	"k8s/addons/1.8/kubernetesmasteraddons-heapster-deployment.yaml":              k8sAddons18KubernetesmasteraddonsHeapsterDeploymentYaml,
 	"k8s/addons/1.9/kubernetesmasteraddons-metrics-server-deployment.yaml":        k8sAddons19KubernetesmasteraddonsMetricsServerDeploymentYaml,
-	"k8s/addons/antrea.yaml":                                                      k8sAddonsAntreaYaml,
-	"k8s/addons/azure-cni-networkmonitor.yaml":                                    k8sAddonsAzureCniNetworkmonitorYaml,
-	"k8s/addons/azure-policy-deployment.yaml":                                     k8sAddonsAzurePolicyDeploymentYaml,
-	"k8s/addons/coredns.yaml":                                                     k8sAddonsCorednsYaml,
-	"k8s/addons/dns-autoscaler.yaml":                                              k8sAddonsDnsAutoscalerYaml,
-	"k8s/addons/ip-masq-agent.yaml":                                               k8sAddonsIpMasqAgentYaml,
-	"k8s/addons/kubernetesmaster-audit-policy.yaml":                               k8sAddonsKubernetesmasterAuditPolicyYaml,
-	"k8s/addons/kubernetesmasteraddons-aad-default-admin-group-rbac.yaml":         k8sAddonsKubernetesmasteraddonsAadDefaultAdminGroupRbacYaml,
-	"k8s/addons/kubernetesmasteraddons-aad-pod-identity-deployment.yaml":          k8sAddonsKubernetesmasteraddonsAadPodIdentityDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-aci-connector-deployment.yaml":             k8sAddonsKubernetesmasteraddonsAciConnectorDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-azure-cloud-provider-deployment.yaml":      k8sAddonsKubernetesmasteraddonsAzureCloudProviderDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-azure-npm-daemonset.yaml":                  k8sAddonsKubernetesmasteraddonsAzureNpmDaemonsetYaml,
-	"k8s/addons/kubernetesmasteraddons-azuredisk-csi-driver-deployment.yaml":      k8sAddonsKubernetesmasteraddonsAzurediskCsiDriverDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-azurefile-csi-driver-deployment.yaml":      k8sAddonsKubernetesmasteraddonsAzurefileCsiDriverDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-blobfuse-flexvolume-installer.yaml":        k8sAddonsKubernetesmasteraddonsBlobfuseFlexvolumeInstallerYaml,
-	"k8s/addons/kubernetesmasteraddons-calico-daemonset.yaml":                     k8sAddonsKubernetesmasteraddonsCalicoDaemonsetYaml,
-	"k8s/addons/kubernetesmasteraddons-cilium-daemonset.yaml":                     k8sAddonsKubernetesmasteraddonsCiliumDaemonsetYaml,
-	"k8s/addons/kubernetesmasteraddons-cluster-autoscaler-deployment.yaml":        k8sAddonsKubernetesmasteraddonsClusterAutoscalerDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-flannel-daemonset.yaml":                    k8sAddonsKubernetesmasteraddonsFlannelDaemonsetYaml,
-	"k8s/addons/kubernetesmasteraddons-heapster-deployment.yaml":                  k8sAddonsKubernetesmasteraddonsHeapsterDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-keyvault-flexvolume-installer.yaml":        k8sAddonsKubernetesmasteraddonsKeyvaultFlexvolumeInstallerYaml,
-	"k8s/addons/kubernetesmasteraddons-kube-dns-deployment.yaml":                  k8sAddonsKubernetesmasteraddonsKubeDnsDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-kube-proxy-daemonset.yaml":                 k8sAddonsKubernetesmasteraddonsKubeProxyDaemonsetYaml,
-	"k8s/addons/kubernetesmasteraddons-kube-rescheduler-deployment.yaml":          k8sAddonsKubernetesmasteraddonsKubeReschedulerDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-kubernetes-dashboard-deployment.yaml":      k8sAddonsKubernetesmasteraddonsKubernetesDashboardDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-metrics-server-deployment.yaml":            k8sAddonsKubernetesmasteraddonsMetricsServerDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-nvidia-device-plugin-daemonset.yaml":       k8sAddonsKubernetesmasteraddonsNvidiaDevicePluginDaemonsetYaml,
-	"k8s/addons/kubernetesmasteraddons-omsagent-daemonset.yaml":                   k8sAddonsKubernetesmasteraddonsOmsagentDaemonsetYaml,
-	"k8s/addons/kubernetesmasteraddons-pod-security-policy.yaml":                  k8sAddonsKubernetesmasteraddonsPodSecurityPolicyYaml,
-	"k8s/addons/kubernetesmasteraddons-scheduled-maintenance-deployment.yaml":     k8sAddonsKubernetesmasteraddonsScheduledMaintenanceDeploymentYaml,
-	"k8s/addons/kubernetesmasteraddons-smb-flexvolume-installer.yaml":             k8sAddonsKubernetesmasteraddonsSmbFlexvolumeInstallerYaml,
-	"k8s/addons/kubernetesmasteraddons-tiller-deployment.yaml":                    k8sAddonsKubernetesmasteraddonsTillerDeploymentYaml,
-	"k8s/addons/node-problem-detector.yaml":                                       k8sAddonsNodeProblemDetectorYaml,
-	"k8s/armparameters.t":                                                         k8sArmparametersT,
-	"k8s/cloud-init/artifacts/apt-preferences":                                    k8sCloudInitArtifactsAptPreferences,
-	"k8s/cloud-init/artifacts/auditd-rules":                                       k8sCloudInitArtifactsAuditdRules,
-	"k8s/cloud-init/artifacts/cis.sh":                                             k8sCloudInitArtifactsCisSh,
-	"k8s/cloud-init/artifacts/cse_config.sh":                                      k8sCloudInitArtifactsCse_configSh,
-	"k8s/cloud-init/artifacts/cse_customcloud.sh":                                 k8sCloudInitArtifactsCse_customcloudSh,
-	"k8s/cloud-init/artifacts/cse_helpers.sh":                                     k8sCloudInitArtifactsCse_helpersSh,
-	"k8s/cloud-init/artifacts/cse_install.sh":                                     k8sCloudInitArtifactsCse_installSh,
-	"k8s/cloud-init/artifacts/cse_main.sh":                                        k8sCloudInitArtifactsCse_mainSh,
-	"k8s/cloud-init/artifacts/default-grub":                                       k8sCloudInitArtifactsDefaultGrub,
-	"k8s/cloud-init/artifacts/dhcpv6.service":                                     k8sCloudInitArtifactsDhcpv6Service,
-	"k8s/cloud-init/artifacts/docker-monitor.service":                             k8sCloudInitArtifactsDockerMonitorService,
-	"k8s/cloud-init/artifacts/docker-monitor.timer":                               k8sCloudInitArtifactsDockerMonitorTimer,
-	"k8s/cloud-init/artifacts/docker_clear_mount_propagation_flags.conf":          k8sCloudInitArtifactsDocker_clear_mount_propagation_flagsConf,
-	"k8s/cloud-init/artifacts/enable-dhcpv6.sh":                                   k8sCloudInitArtifactsEnableDhcpv6Sh,
-	"k8s/cloud-init/artifacts/etc-issue":                                          k8sCloudInitArtifactsEtcIssue,
-	"k8s/cloud-init/artifacts/etc-issue.net":                                      k8sCloudInitArtifactsEtcIssueNet,
-	"k8s/cloud-init/artifacts/etcd.service":                                       k8sCloudInitArtifactsEtcdService,
-	"k8s/cloud-init/artifacts/generateproxycerts.sh":                              k8sCloudInitArtifactsGenerateproxycertsSh,
-	"k8s/cloud-init/artifacts/health-monitor.sh":                                  k8sCloudInitArtifactsHealthMonitorSh,
-	"k8s/cloud-init/artifacts/init-aks-custom-cloud.sh":                           k8sCloudInitArtifactsInitAksCustomCloudSh,
-	"k8s/cloud-init/artifacts/kms.service":                                        k8sCloudInitArtifactsKmsService,
-	"k8s/cloud-init/artifacts/kubelet-monitor.service":                            k8sCloudInitArtifactsKubeletMonitorService,
-	"k8s/cloud-init/artifacts/kubelet-monitor.timer":                              k8sCloudInitArtifactsKubeletMonitorTimer,
-	"k8s/cloud-init/artifacts/kubelet.service":                                    k8sCloudInitArtifactsKubeletService,
-	"k8s/cloud-init/artifacts/label-nodes.service":                                k8sCloudInitArtifactsLabelNodesService,
-	"k8s/cloud-init/artifacts/label-nodes.sh":                                     k8sCloudInitArtifactsLabelNodesSh,
-	"k8s/cloud-init/artifacts/modprobe-CIS.conf":                                  k8sCloudInitArtifactsModprobeCisConf,
-	"k8s/cloud-init/artifacts/mountetcd.sh":                                       k8sCloudInitArtifactsMountetcdSh,
-	"k8s/cloud-init/artifacts/pam-d-common-auth":                                  k8sCloudInitArtifactsPamDCommonAuth,
-	"k8s/cloud-init/artifacts/pam-d-common-password":                              k8sCloudInitArtifactsPamDCommonPassword,
-	"k8s/cloud-init/artifacts/pam-d-su":                                           k8sCloudInitArtifactsPamDSu,
-	"k8s/cloud-init/artifacts/profile-d-cis.sh":                                   k8sCloudInitArtifactsProfileDCisSh,
-	"k8s/cloud-init/artifacts/pwquality-CIS.conf":                                 k8sCloudInitArtifactsPwqualityCisConf,
-	"k8s/cloud-init/artifacts/rsyslog-d-60-CIS.conf":                              k8sCloudInitArtifactsRsyslogD60CisConf,
-	"k8s/cloud-init/artifacts/setup-custom-search-domains.sh":                     k8sCloudInitArtifactsSetupCustomSearchDomainsSh,
-	"k8s/cloud-init/artifacts/sshd_config":                                        k8sCloudInitArtifactsSshd_config,
-	"k8s/cloud-init/artifacts/sshd_config_1604":                                   k8sCloudInitArtifactsSshd_config_1604,
-	"k8s/cloud-init/artifacts/sys-fs-bpf.mount":                                   k8sCloudInitArtifactsSysFsBpfMount,
-	"k8s/cloud-init/artifacts/sysctl-d-60-CIS.conf":                               k8sCloudInitArtifactsSysctlD60CisConf,
-	"k8s/cloud-init/jumpboxcustomdata.yml":                                        k8sCloudInitJumpboxcustomdataYml,
-	"k8s/cloud-init/masternodecustomdata.yml":                                     k8sCloudInitMasternodecustomdataYml,
-	"k8s/cloud-init/nodecustomdata.yml":                                           k8sCloudInitNodecustomdataYml,
-	"k8s/kubeconfig.json":                                                         k8sKubeconfigJson,
-	"k8s/kubernetesparams.t":                                                      k8sKubernetesparamsT,
-	"k8s/kuberneteswindowsfunctions.ps1":                                          k8sKuberneteswindowsfunctionsPs1,
-	"k8s/kuberneteswindowssetup.ps1":                                              k8sKuberneteswindowssetupPs1,
-	"k8s/manifests/1.17/kubernetesmaster-kube-apiserver.yaml":                     k8sManifests117KubernetesmasterKubeApiserverYaml,
-	"k8s/manifests/1.17/kubernetesmaster-kube-controller-manager.yaml":            k8sManifests117KubernetesmasterKubeControllerManagerYaml,
-	"k8s/manifests/1.17/kubernetesmaster-kube-scheduler.yaml":                     k8sManifests117KubernetesmasterKubeSchedulerYaml,
-	"k8s/manifests/1.18/kubernetesmaster-kube-apiserver.yaml":                     k8sManifests118KubernetesmasterKubeApiserverYaml,
-	"k8s/manifests/1.18/kubernetesmaster-kube-controller-manager.yaml":            k8sManifests118KubernetesmasterKubeControllerManagerYaml,
-	"k8s/manifests/1.18/kubernetesmaster-kube-scheduler.yaml":                     k8sManifests118KubernetesmasterKubeSchedulerYaml,
-	"k8s/manifests/kubernetesmaster-cloud-controller-manager.yaml":                k8sManifestsKubernetesmasterCloudControllerManagerYaml,
-	"k8s/manifests/kubernetesmaster-kube-addon-manager.yaml":                      k8sManifestsKubernetesmasterKubeAddonManagerYaml,
-	"k8s/manifests/kubernetesmaster-kube-apiserver.yaml":                          k8sManifestsKubernetesmasterKubeApiserverYaml,
-	"k8s/manifests/kubernetesmaster-kube-controller-manager-custom.yaml":          k8sManifestsKubernetesmasterKubeControllerManagerCustomYaml,
-	"k8s/manifests/kubernetesmaster-kube-controller-manager.yaml":                 k8sManifestsKubernetesmasterKubeControllerManagerYaml,
-	"k8s/manifests/kubernetesmaster-kube-scheduler.yaml":                          k8sManifestsKubernetesmasterKubeSchedulerYaml,
-	"k8s/windowsazurecnifunc.ps1":                                                 k8sWindowsazurecnifuncPs1,
-	"k8s/windowsazurecnifunc.tests.ps1":                                           k8sWindowsazurecnifuncTestsPs1,
-	"k8s/windowscnifunc.ps1":                                                      k8sWindowscnifuncPs1,
-	"k8s/windowsconfigfunc.ps1":                                                   k8sWindowsconfigfuncPs1,
-	"k8s/windowscontainerdfunc.ps1":                                               k8sWindowscontainerdfuncPs1,
-	"k8s/windowscsiproxyfunc.ps1":                                                 k8sWindowscsiproxyfuncPs1,
-	"k8s/windowshostsconfigagentfunc.ps1":                                         k8sWindowshostsconfigagentfuncPs1,
-	"k8s/windowsinstallopensshfunc.ps1":                                           k8sWindowsinstallopensshfuncPs1,
-	"k8s/windowskubeletfunc.ps1":                                                  k8sWindowskubeletfuncPs1,
-	"masteroutputs.t":                                                             masteroutputsT,
-	"masterparams.t":                                                              masterparamsT,
-	"swarm/Install-ContainerHost-And-Join-Swarm.ps1":                              swarmInstallContainerhostAndJoinSwarmPs1,
-	"swarm/Join-SwarmMode-cluster.ps1":                                            swarmJoinSwarmmodeClusterPs1,
-	"swarm/configure-swarm-cluster.sh":                                            swarmConfigureSwarmClusterSh,
-	"swarm/configure-swarmmode-cluster.sh":                                        swarmConfigureSwarmmodeClusterSh,
-	"swarm/swarmagentresourcesvmas.t":                                             swarmSwarmagentresourcesvmasT,
-	"swarm/swarmagentresourcesvmss.t":                                             swarmSwarmagentresourcesvmssT,
-	"swarm/swarmagentvars.t":                                                      swarmSwarmagentvarsT,
-	"swarm/swarmbase.t":                                                           swarmSwarmbaseT,
-	"swarm/swarmmasterresources.t":                                                swarmSwarmmasterresourcesT,
-	"swarm/swarmmastervars.t":                                                     swarmSwarmmastervarsT,
-	"swarm/swarmparams.t":                                                         swarmSwarmparamsT,
-	"swarm/swarmwinagentresourcesvmas.t":                                          swarmSwarmwinagentresourcesvmasT,
-	"swarm/swarmwinagentresourcesvmss.t":                                          swarmSwarmwinagentresourcesvmssT,
-	"windowsparams.t":                                                             windowsparamsT,
+	"k8s/addons/antrea.yaml":                                                  k8sAddonsAntreaYaml,
+	"k8s/addons/azure-cni-networkmonitor.yaml":                                k8sAddonsAzureCniNetworkmonitorYaml,
+	"k8s/addons/azure-policy-deployment.yaml":                                 k8sAddonsAzurePolicyDeploymentYaml,
+	"k8s/addons/coredns.yaml":                                                 k8sAddonsCorednsYaml,
+	"k8s/addons/dns-autoscaler.yaml":                                          k8sAddonsDnsAutoscalerYaml,
+	"k8s/addons/ip-masq-agent.yaml":                                           k8sAddonsIpMasqAgentYaml,
+	"k8s/addons/kubernetesmaster-audit-policy.yaml":                           k8sAddonsKubernetesmasterAuditPolicyYaml,
+	"k8s/addons/kubernetesmasteraddons-aad-default-admin-group-rbac.yaml":     k8sAddonsKubernetesmasteraddonsAadDefaultAdminGroupRbacYaml,
+	"k8s/addons/kubernetesmasteraddons-aad-pod-identity-deployment.yaml":      k8sAddonsKubernetesmasteraddonsAadPodIdentityDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-aci-connector-deployment.yaml":         k8sAddonsKubernetesmasteraddonsAciConnectorDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-azure-cloud-provider-deployment.yaml":  k8sAddonsKubernetesmasteraddonsAzureCloudProviderDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-azure-npm-daemonset.yaml":              k8sAddonsKubernetesmasteraddonsAzureNpmDaemonsetYaml,
+	"k8s/addons/kubernetesmasteraddons-azuredisk-csi-driver-deployment.yaml":  k8sAddonsKubernetesmasteraddonsAzurediskCsiDriverDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-azurefile-csi-driver-deployment.yaml":  k8sAddonsKubernetesmasteraddonsAzurefileCsiDriverDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-blobfuse-flexvolume-installer.yaml":    k8sAddonsKubernetesmasteraddonsBlobfuseFlexvolumeInstallerYaml,
+	"k8s/addons/kubernetesmasteraddons-calico-daemonset.yaml":                 k8sAddonsKubernetesmasteraddonsCalicoDaemonsetYaml,
+	"k8s/addons/kubernetesmasteraddons-cilium-daemonset.yaml":                 k8sAddonsKubernetesmasteraddonsCiliumDaemonsetYaml,
+	"k8s/addons/kubernetesmasteraddons-cluster-autoscaler-deployment.yaml":    k8sAddonsKubernetesmasteraddonsClusterAutoscalerDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-flannel-daemonset.yaml":                k8sAddonsKubernetesmasteraddonsFlannelDaemonsetYaml,
+	"k8s/addons/kubernetesmasteraddons-heapster-deployment.yaml":              k8sAddonsKubernetesmasteraddonsHeapsterDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-keyvault-flexvolume-installer.yaml":    k8sAddonsKubernetesmasteraddonsKeyvaultFlexvolumeInstallerYaml,
+	"k8s/addons/kubernetesmasteraddons-kube-dns-deployment.yaml":              k8sAddonsKubernetesmasteraddonsKubeDnsDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-kube-proxy-daemonset.yaml":             k8sAddonsKubernetesmasteraddonsKubeProxyDaemonsetYaml,
+	"k8s/addons/kubernetesmasteraddons-kube-rescheduler-deployment.yaml":      k8sAddonsKubernetesmasteraddonsKubeReschedulerDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-kubernetes-dashboard-deployment.yaml":  k8sAddonsKubernetesmasteraddonsKubernetesDashboardDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-metrics-server-deployment.yaml":        k8sAddonsKubernetesmasteraddonsMetricsServerDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-nvidia-device-plugin-daemonset.yaml":   k8sAddonsKubernetesmasteraddonsNvidiaDevicePluginDaemonsetYaml,
+	"k8s/addons/kubernetesmasteraddons-omsagent-daemonset.yaml":               k8sAddonsKubernetesmasteraddonsOmsagentDaemonsetYaml,
+	"k8s/addons/kubernetesmasteraddons-pod-security-policy.yaml":              k8sAddonsKubernetesmasteraddonsPodSecurityPolicyYaml,
+	"k8s/addons/kubernetesmasteraddons-scheduled-maintenance-deployment.yaml": k8sAddonsKubernetesmasteraddonsScheduledMaintenanceDeploymentYaml,
+	"k8s/addons/kubernetesmasteraddons-smb-flexvolume-installer.yaml":         k8sAddonsKubernetesmasteraddonsSmbFlexvolumeInstallerYaml,
+	"k8s/addons/kubernetesmasteraddons-tiller-deployment.yaml":                k8sAddonsKubernetesmasteraddonsTillerDeploymentYaml,
+	"k8s/addons/node-problem-detector.yaml":                                   k8sAddonsNodeProblemDetectorYaml,
+	"k8s/armparameters.t":                                                     k8sArmparametersT,
+	"k8s/cloud-init/artifacts/apt-preferences":                                k8sCloudInitArtifactsAptPreferences,
+	"k8s/cloud-init/artifacts/auditd-rules":                                   k8sCloudInitArtifactsAuditdRules,
+	"k8s/cloud-init/artifacts/cis.sh":                                         k8sCloudInitArtifactsCisSh,
+	"k8s/cloud-init/artifacts/cse_config.sh":                                  k8sCloudInitArtifactsCse_configSh,
+	"k8s/cloud-init/artifacts/cse_customcloud.sh":                             k8sCloudInitArtifactsCse_customcloudSh,
+	"k8s/cloud-init/artifacts/cse_helpers.sh":                                 k8sCloudInitArtifactsCse_helpersSh,
+	"k8s/cloud-init/artifacts/cse_install.sh":                                 k8sCloudInitArtifactsCse_installSh,
+	"k8s/cloud-init/artifacts/cse_main.sh":                                    k8sCloudInitArtifactsCse_mainSh,
+	"k8s/cloud-init/artifacts/default-grub":                                   k8sCloudInitArtifactsDefaultGrub,
+	"k8s/cloud-init/artifacts/dhcpv6.service":                                 k8sCloudInitArtifactsDhcpv6Service,
+	"k8s/cloud-init/artifacts/docker-monitor.service":                         k8sCloudInitArtifactsDockerMonitorService,
+	"k8s/cloud-init/artifacts/docker-monitor.timer":                           k8sCloudInitArtifactsDockerMonitorTimer,
+	"k8s/cloud-init/artifacts/docker_clear_mount_propagation_flags.conf":      k8sCloudInitArtifactsDocker_clear_mount_propagation_flagsConf,
+	"k8s/cloud-init/artifacts/enable-dhcpv6.sh":                               k8sCloudInitArtifactsEnableDhcpv6Sh,
+	"k8s/cloud-init/artifacts/etc-issue":                                      k8sCloudInitArtifactsEtcIssue,
+	"k8s/cloud-init/artifacts/etc-issue.net":                                  k8sCloudInitArtifactsEtcIssueNet,
+	"k8s/cloud-init/artifacts/etcd.service":                                   k8sCloudInitArtifactsEtcdService,
+	"k8s/cloud-init/artifacts/generateproxycerts.sh":                          k8sCloudInitArtifactsGenerateproxycertsSh,
+	"k8s/cloud-init/artifacts/health-monitor.sh":                              k8sCloudInitArtifactsHealthMonitorSh,
+	"k8s/cloud-init/artifacts/init-aks-custom-cloud.sh":                       k8sCloudInitArtifactsInitAksCustomCloudSh,
+	"k8s/cloud-init/artifacts/kms.service":                                    k8sCloudInitArtifactsKmsService,
+	"k8s/cloud-init/artifacts/kubelet-monitor.service":                        k8sCloudInitArtifactsKubeletMonitorService,
+	"k8s/cloud-init/artifacts/kubelet-monitor.timer":                          k8sCloudInitArtifactsKubeletMonitorTimer,
+	"k8s/cloud-init/artifacts/kubelet.service":                                k8sCloudInitArtifactsKubeletService,
+	"k8s/cloud-init/artifacts/label-nodes.service":                            k8sCloudInitArtifactsLabelNodesService,
+	"k8s/cloud-init/artifacts/label-nodes.sh":                                 k8sCloudInitArtifactsLabelNodesSh,
+	"k8s/cloud-init/artifacts/modprobe-CIS.conf":                              k8sCloudInitArtifactsModprobeCisConf,
+	"k8s/cloud-init/artifacts/mountetcd.sh":                                   k8sCloudInitArtifactsMountetcdSh,
+	"k8s/cloud-init/artifacts/pam-d-common-auth":                              k8sCloudInitArtifactsPamDCommonAuth,
+	"k8s/cloud-init/artifacts/pam-d-common-password":                          k8sCloudInitArtifactsPamDCommonPassword,
+	"k8s/cloud-init/artifacts/pam-d-su":                                       k8sCloudInitArtifactsPamDSu,
+	"k8s/cloud-init/artifacts/profile-d-cis.sh":                               k8sCloudInitArtifactsProfileDCisSh,
+	"k8s/cloud-init/artifacts/pwquality-CIS.conf":                             k8sCloudInitArtifactsPwqualityCisConf,
+	"k8s/cloud-init/artifacts/rsyslog-d-60-CIS.conf":                          k8sCloudInitArtifactsRsyslogD60CisConf,
+	"k8s/cloud-init/artifacts/setup-custom-search-domains.sh":                 k8sCloudInitArtifactsSetupCustomSearchDomainsSh,
+	"k8s/cloud-init/artifacts/sshd_config":                                    k8sCloudInitArtifactsSshd_config,
+	"k8s/cloud-init/artifacts/sshd_config_1604":                               k8sCloudInitArtifactsSshd_config_1604,
+	"k8s/cloud-init/artifacts/sys-fs-bpf.mount":                               k8sCloudInitArtifactsSysFsBpfMount,
+	"k8s/cloud-init/artifacts/sysctl-d-60-CIS.conf":                           k8sCloudInitArtifactsSysctlD60CisConf,
+	"k8s/cloud-init/jumpboxcustomdata.yml":                                    k8sCloudInitJumpboxcustomdataYml,
+	"k8s/cloud-init/masternodecustomdata.yml":                                 k8sCloudInitMasternodecustomdataYml,
+	"k8s/cloud-init/nodecustomdata.yml":                                       k8sCloudInitNodecustomdataYml,
+	"k8s/containerdtemplate.toml":                                             k8sContainerdtemplateToml,
+	"k8s/kubeconfig.json":                                                     k8sKubeconfigJson,
+	"k8s/kubernetesparams.t":                                                  k8sKubernetesparamsT,
+	"k8s/kuberneteswindowsfunctions.ps1":                                      k8sKuberneteswindowsfunctionsPs1,
+	"k8s/kuberneteswindowssetup.ps1":                                          k8sKuberneteswindowssetupPs1,
+	"k8s/manifests/1.17/kubernetesmaster-kube-apiserver.yaml":                 k8sManifests117KubernetesmasterKubeApiserverYaml,
+	"k8s/manifests/1.17/kubernetesmaster-kube-controller-manager.yaml":        k8sManifests117KubernetesmasterKubeControllerManagerYaml,
+	"k8s/manifests/1.17/kubernetesmaster-kube-scheduler.yaml":                 k8sManifests117KubernetesmasterKubeSchedulerYaml,
+	"k8s/manifests/1.18/kubernetesmaster-kube-apiserver.yaml":                 k8sManifests118KubernetesmasterKubeApiserverYaml,
+	"k8s/manifests/1.18/kubernetesmaster-kube-controller-manager.yaml":        k8sManifests118KubernetesmasterKubeControllerManagerYaml,
+	"k8s/manifests/1.18/kubernetesmaster-kube-scheduler.yaml":                 k8sManifests118KubernetesmasterKubeSchedulerYaml,
+	"k8s/manifests/kubernetesmaster-cloud-controller-manager.yaml":            k8sManifestsKubernetesmasterCloudControllerManagerYaml,
+	"k8s/manifests/kubernetesmaster-kube-addon-manager.yaml":                  k8sManifestsKubernetesmasterKubeAddonManagerYaml,
+	"k8s/manifests/kubernetesmaster-kube-apiserver.yaml":                      k8sManifestsKubernetesmasterKubeApiserverYaml,
+	"k8s/manifests/kubernetesmaster-kube-controller-manager-custom.yaml":      k8sManifestsKubernetesmasterKubeControllerManagerCustomYaml,
+	"k8s/manifests/kubernetesmaster-kube-controller-manager.yaml":             k8sManifestsKubernetesmasterKubeControllerManagerYaml,
+	"k8s/manifests/kubernetesmaster-kube-scheduler.yaml":                      k8sManifestsKubernetesmasterKubeSchedulerYaml,
+	"k8s/windowsazurecnifunc.ps1":                                             k8sWindowsazurecnifuncPs1,
+	"k8s/windowsazurecnifunc.tests.ps1":                                       k8sWindowsazurecnifuncTestsPs1,
+	"k8s/windowscnifunc.ps1":                                                  k8sWindowscnifuncPs1,
+	"k8s/windowsconfigfunc.ps1":                                               k8sWindowsconfigfuncPs1,
+	"k8s/windowscontainerdfunc.ps1":                                           k8sWindowscontainerdfuncPs1,
+	"k8s/windowscsiproxyfunc.ps1":                                             k8sWindowscsiproxyfuncPs1,
+	"k8s/windowshostsconfigagentfunc.ps1":                                     k8sWindowshostsconfigagentfuncPs1,
+	"k8s/windowsinstallopensshfunc.ps1":                                       k8sWindowsinstallopensshfuncPs1,
+	"k8s/windowskubeletfunc.ps1":                                              k8sWindowskubeletfuncPs1,
+	"masteroutputs.t":                                                         masteroutputsT,
+	"masterparams.t":                                                          masterparamsT,
+	"swarm/Install-ContainerHost-And-Join-Swarm.ps1":                          swarmInstallContainerhostAndJoinSwarmPs1,
+	"swarm/Join-SwarmMode-cluster.ps1":                                        swarmJoinSwarmmodeClusterPs1,
+	"swarm/configure-swarm-cluster.sh":                                        swarmConfigureSwarmClusterSh,
+	"swarm/configure-swarmmode-cluster.sh":                                    swarmConfigureSwarmmodeClusterSh,
+	"swarm/swarmagentresourcesvmas.t":                                         swarmSwarmagentresourcesvmasT,
+	"swarm/swarmagentresourcesvmss.t":                                         swarmSwarmagentresourcesvmssT,
+	"swarm/swarmagentvars.t":                                                  swarmSwarmagentvarsT,
+	"swarm/swarmbase.t":                                                       swarmSwarmbaseT,
+	"swarm/swarmmasterresources.t":                                            swarmSwarmmasterresourcesT,
+	"swarm/swarmmastervars.t":                                                 swarmSwarmmastervarsT,
+	"swarm/swarmparams.t":                                                     swarmSwarmparamsT,
+	"swarm/swarmwinagentresourcesvmas.t":                                      swarmSwarmwinagentresourcesvmasT,
+	"swarm/swarmwinagentresourcesvmss.t":                                      swarmSwarmwinagentresourcesvmssT,
+	"windowsparams.t":                                                         windowsparamsT,
 }
 
 // AssetDir returns the file names below a certain
@@ -47714,13 +47810,13 @@ var _bintree = &bintree{nil, map[string]*bintree{
 			"1.9": {nil, map[string]*bintree{
 				"kubernetesmasteraddons-metrics-server-deployment.yaml": {k8sAddons19KubernetesmasteraddonsMetricsServerDeploymentYaml, map[string]*bintree{}},
 			}},
-			"antrea.yaml":                                                  {k8sAddonsAntreaYaml, map[string]*bintree{}},
-			"azure-cni-networkmonitor.yaml":                                {k8sAddonsAzureCniNetworkmonitorYaml, map[string]*bintree{}},
-			"azure-policy-deployment.yaml":                                 {k8sAddonsAzurePolicyDeploymentYaml, map[string]*bintree{}},
-			"coredns.yaml":                                                 {k8sAddonsCorednsYaml, map[string]*bintree{}},
-			"dns-autoscaler.yaml":                                          {k8sAddonsDnsAutoscalerYaml, map[string]*bintree{}},
-			"ip-masq-agent.yaml":                                           {k8sAddonsIpMasqAgentYaml, map[string]*bintree{}},
-			"kubernetesmaster-audit-policy.yaml":                           {k8sAddonsKubernetesmasterAuditPolicyYaml, map[string]*bintree{}},
+			"antrea.yaml":                        {k8sAddonsAntreaYaml, map[string]*bintree{}},
+			"azure-cni-networkmonitor.yaml":      {k8sAddonsAzureCniNetworkmonitorYaml, map[string]*bintree{}},
+			"azure-policy-deployment.yaml":       {k8sAddonsAzurePolicyDeploymentYaml, map[string]*bintree{}},
+			"coredns.yaml":                       {k8sAddonsCorednsYaml, map[string]*bintree{}},
+			"dns-autoscaler.yaml":                {k8sAddonsDnsAutoscalerYaml, map[string]*bintree{}},
+			"ip-masq-agent.yaml":                 {k8sAddonsIpMasqAgentYaml, map[string]*bintree{}},
+			"kubernetesmaster-audit-policy.yaml": {k8sAddonsKubernetesmasterAuditPolicyYaml, map[string]*bintree{}},
 			"kubernetesmasteraddons-aad-default-admin-group-rbac.yaml":     {k8sAddonsKubernetesmasteraddonsAadDefaultAdminGroupRbacYaml, map[string]*bintree{}},
 			"kubernetesmasteraddons-aad-pod-identity-deployment.yaml":      {k8sAddonsKubernetesmasteraddonsAadPodIdentityDeploymentYaml, map[string]*bintree{}},
 			"kubernetesmasteraddons-aci-connector-deployment.yaml":         {k8sAddonsKubernetesmasteraddonsAciConnectorDeploymentYaml, map[string]*bintree{}},
@@ -47751,18 +47847,18 @@ var _bintree = &bintree{nil, map[string]*bintree{
 		"armparameters.t": {k8sArmparametersT, map[string]*bintree{}},
 		"cloud-init": {nil, map[string]*bintree{
 			"artifacts": {nil, map[string]*bintree{
-				"apt-preferences":                           {k8sCloudInitArtifactsAptPreferences, map[string]*bintree{}},
-				"auditd-rules":                              {k8sCloudInitArtifactsAuditdRules, map[string]*bintree{}},
-				"cis.sh":                                    {k8sCloudInitArtifactsCisSh, map[string]*bintree{}},
-				"cse_config.sh":                             {k8sCloudInitArtifactsCse_configSh, map[string]*bintree{}},
-				"cse_customcloud.sh":                        {k8sCloudInitArtifactsCse_customcloudSh, map[string]*bintree{}},
-				"cse_helpers.sh":                            {k8sCloudInitArtifactsCse_helpersSh, map[string]*bintree{}},
-				"cse_install.sh":                            {k8sCloudInitArtifactsCse_installSh, map[string]*bintree{}},
-				"cse_main.sh":                               {k8sCloudInitArtifactsCse_mainSh, map[string]*bintree{}},
-				"default-grub":                              {k8sCloudInitArtifactsDefaultGrub, map[string]*bintree{}},
-				"dhcpv6.service":                            {k8sCloudInitArtifactsDhcpv6Service, map[string]*bintree{}},
-				"docker-monitor.service":                    {k8sCloudInitArtifactsDockerMonitorService, map[string]*bintree{}},
-				"docker-monitor.timer":                      {k8sCloudInitArtifactsDockerMonitorTimer, map[string]*bintree{}},
+				"apt-preferences":        {k8sCloudInitArtifactsAptPreferences, map[string]*bintree{}},
+				"auditd-rules":           {k8sCloudInitArtifactsAuditdRules, map[string]*bintree{}},
+				"cis.sh":                 {k8sCloudInitArtifactsCisSh, map[string]*bintree{}},
+				"cse_config.sh":          {k8sCloudInitArtifactsCse_configSh, map[string]*bintree{}},
+				"cse_customcloud.sh":     {k8sCloudInitArtifactsCse_customcloudSh, map[string]*bintree{}},
+				"cse_helpers.sh":         {k8sCloudInitArtifactsCse_helpersSh, map[string]*bintree{}},
+				"cse_install.sh":         {k8sCloudInitArtifactsCse_installSh, map[string]*bintree{}},
+				"cse_main.sh":            {k8sCloudInitArtifactsCse_mainSh, map[string]*bintree{}},
+				"default-grub":           {k8sCloudInitArtifactsDefaultGrub, map[string]*bintree{}},
+				"dhcpv6.service":         {k8sCloudInitArtifactsDhcpv6Service, map[string]*bintree{}},
+				"docker-monitor.service": {k8sCloudInitArtifactsDockerMonitorService, map[string]*bintree{}},
+				"docker-monitor.timer":   {k8sCloudInitArtifactsDockerMonitorTimer, map[string]*bintree{}},
 				"docker_clear_mount_propagation_flags.conf": {k8sCloudInitArtifactsDocker_clear_mount_propagation_flagsConf, map[string]*bintree{}},
 				"enable-dhcpv6.sh":                          {k8sCloudInitArtifactsEnableDhcpv6Sh, map[string]*bintree{}},
 				"etc-issue":                                 {k8sCloudInitArtifactsEtcIssue, map[string]*bintree{}},
@@ -47795,6 +47891,7 @@ var _bintree = &bintree{nil, map[string]*bintree{
 			"masternodecustomdata.yml": {k8sCloudInitMasternodecustomdataYml, map[string]*bintree{}},
 			"nodecustomdata.yml":       {k8sCloudInitNodecustomdataYml, map[string]*bintree{}},
 		}},
+		"containerdtemplate.toml":        {k8sContainerdtemplateToml, map[string]*bintree{}},
 		"kubeconfig.json":                {k8sKubeconfigJson, map[string]*bintree{}},
 		"kubernetesparams.t":             {k8sKubernetesparamsT, map[string]*bintree{}},
 		"kuberneteswindowsfunctions.ps1": {k8sKuberneteswindowsfunctionsPs1, map[string]*bintree{}},
